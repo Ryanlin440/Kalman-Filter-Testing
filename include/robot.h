@@ -112,7 +112,7 @@ extern lemlib::PID arm_hold_pid;
 void moveArmTo(double target, int timeoutMs = 2000, float maxSpeed = 127.0f);
 void moveArmToHold(double target, int timeoutMs = 2000, float maxSpeed = 127.0f);
 inline constexpr double downArmDegPinAndCup = 65;
-inline constexpr double downArmDegPinAndCupClamping = 0;
+inline constexpr double downArmDegPinAndCupClamping = -10;
 inline constexpr double downArmDegJustPin = 0;
 inline constexpr double allianceGoalWithNothing = 5;
 inline constexpr double normalAllianceGoal = 5;
@@ -123,8 +123,8 @@ constexpr float CASCADE_TRAVEL_SCALE = 2.355f;
 constexpr float INCHES_PER_DEGREE = (HS_AXLE_DIAMETER * 3.14159f) / 360.0f * CASCADE_TRAVEL_SCALE;
 
 // cascade heights are in inches
-inline constexpr double cascadeRestHeight = 2.017;  // was 2.517
-inline constexpr double cascadeClampingHeight = -1.0;   
+inline constexpr double cascadeRestHeight = 0;  // was 2.517. 2.017
+inline constexpr double cascadeClampingHeight = -0.0;   
 inline constexpr double cascadeLiftOffset = 5.137;     // extra lift before moving the arm (was 1000 deg)
 
 float getCascadeInches();

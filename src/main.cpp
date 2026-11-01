@@ -355,21 +355,21 @@ void competition_initialize() {
  */
 
 void autonomous() { 
-    // distanceReset(90);
-    // chassis.setPose(0, -61.5, 180); //make sure to change this everything
-    // chassis.setPose(0, 61.5, 0);
-    // runAuton();
 
-
-    //chassis.setPose( 61.5,0, 90);
-    // EastWestAuton(); 
-
-    // SkillsAuton();
     poseFusionEnabled = true;
+    autonRunning = true; // keeps the driver button task off the arm (R1Button's hold fights moveArmTo)
 
+    //north south
+    // chassis.setPose(0, 61.5, 0); //make sure to change this everything
+    // NorthSouthAuton(); //make sure to run correct one
 
-    chassis.setPose(0, -61.5, 180); //make sure to change this everything
-    NorthSouthAuton(); //make sure to run correct one
+    // //east west 
+    chassis.setPose(61.5, 0, 90);  //make sure to change this everything
+    EastWestAuton();//make sure to run correct one
+
+    // //Skills 
+    // chassis.setPose(61.5, 0, 90); //make sure to change this everything
+    // SkillsAuton(); //make sure to run correct one
 }
 
 /**
@@ -407,6 +407,9 @@ void linearChassisPID(){
 }
 
 void opcontrol() {
+    // the field kills autonomous() at 15 s, so it never gets to clear this itself
+    autonRunning = false;
+
     /*
     // loop forever
     // autonomous();
@@ -690,7 +693,7 @@ void clampClaw(){
         moveCascadeTo(cascadeClampingHeight, 400); 
         moveArmTo(downArmDegPinAndCupClamping, 600, 30.0f);
     });
-    pros::delay(150);
+    pros::delay(300);
     // grab object
     clawBool = true;
     clawShut.set_value(true);
