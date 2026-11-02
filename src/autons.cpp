@@ -4,6 +4,7 @@
 #include "robot.h"
 #include "pros/llemu.hpp"
 #include "pros/motors.h"
+#include <algorithm>
 
 bool armPosition = true;
 
@@ -756,7 +757,8 @@ void testing(){
 }
 
 // ---------------------------------------------------------------------------
-// Auton selector -- shown on controller line 2. Left/Right to choose.
+// Auton selector -- shown on controller line 2 and brain line 6. Left/Right on
+// the controller or the brain's left/right buttons to choose; both stay in sync.
 //   1st X: locks in the route and sets its start pose. Odometry keeps
 //          tracking from there, so the robot can be pushed into place.
 //   2nd X: starts the route (only without a competition switch/field; on a
@@ -782,78 +784,111 @@ constexpr int autonCount = sizeof(autons) / sizeof(autons[0]);
 
 int selectedAuton = 0; // starts on Driver
 bool pickingAuton = true; // true from boot so nothing runs before the picker is done
+bool autonLocked = false; // set once the route is locked in or started; selection stops changing
 
-// the field has enabled the robot, so stop waiting on the controller
-static bool matchStarted() {
-    return pros::competition::is_connected() && !pros::competition::is_disabled();
+// Moves the selection, clamped to the list, and shows it on the brain. Called from
+// the controller selector and the brain button callbacks, which run in different tasks.
+void selectAuton(int index) {
+    if (autonLocked) return;
+    selectedAuton = std::clamp(index, 0, autonCount - 1);
+    screenPrint(6, "Auton: %s", autons[selectedAuton].name);
+}
+
+// Brain buttons: left/right step through the list, center does nothing for now.
+// These only change the selection; the screen task does the drawing (LVGL isn't thread-safe).
+static void brainLeftButton() { selectAuton(selectedAuton - 1); }
+static void brainRightButton() { selectAuton(selectedAuton + 1); }
+
+void registerBrainAutonSelector() {
+    pros::lcd::register_btn0_cb(brainLeftButton);
+    pros::lcd::register_btn2_cb(brainRightButton);
+    selectAuton(selectedAuton); // show the starting choice
+}
+
+// Controller Left/Right change the selection, and line 2 follows it (including
+// changes from the brain buttons). The controller drops prints sent faster than
+// ~50ms apart, so only print on a change, plus a slow refresh in case one got dropped.
+static void pollControllerSelector(int& shown, uint32_t& lastPrint) {
+    if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_LEFT)) {
+        selectAuton(selectedAuton - 1);
+    }
+    if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_RIGHT)) {
+        selectAuton(selectedAuton + 1);
+    }
+    if (selectedAuton != shown || pros::millis() - lastPrint > 250) {
+        controller.print(2, 0, "Auton: %-12s", autons[selectedAuton].name);
+        shown = selectedAuton;
+        lastPrint = pros::millis();
+    }
 }
 
 void autonSelector() {
     pickingAuton = true; // screen task stops printing to controller line 2
-    pros::delay(100); 
+    pros::delay(100);
 
     // step 1: pick the route, first X locks it in
     int shown = -1;
     uint32_t lastPrint = 0;
     while (true) {
-        if(pros::competition::is_connected()) return;
-        if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_LEFT) && selectedAuton > 0) {
-            selectedAuton--;
+        // on a competition switch/field, competition_initialize() and autonomous()
+        // take over, so don't hold up initialize()
+        if (pros::competition::is_connected()) {
+            pickingAuton = false;
+            return;
         }
-        if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_RIGHT) && selectedAuton < autonCount - 1) {
-            selectedAuton++;
-        }
+        pollControllerSelector(shown, lastPrint);
         if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X)) {
             break;
         }
-        // safety net on the field: if the match starts before X is pressed,
-        // lock in whatever is showing so initialize() can't block the match
-        if (matchStarted()) {
-            break;
-        }
-
-        // the controller drops prints sent faster than ~50ms apart, so only
-        // print on a change, plus a slow refresh in case one got dropped
-        if (selectedAuton != shown || pros::millis() - lastPrint > 250) {
-            controller.print(2, 0, "Auton: %-12s", autons[selectedAuton].name);
-            shown = selectedAuton;
-            lastPrint = pros::millis();
-        }
         pros::delay(20);
-        // break;
     }
 
+    autonLocked = true;
     AutonRoute& route = autons[selectedAuton];
-    screenPrint(6, "Auton: %s", route.name);
+    screenPrint(6, "Auton: %s (locked)", route.name);
 
     // step 2: set the start pose, then wait for the second X to start.
     if (route.run) {
         chassis.setPose(route.x, route.y, route.theta);
-        if (!pros::competition::is_connected()) {
-            
-            pros::delay(60);
-            controller.print(2, 0, "X to start    ");
-            uint32_t lastPrint = pros::millis();
-            while (!controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X)) {
-                // break;
-                if (pros::millis() - lastPrint > 250) {
-                    controller.print(2, 0, "X to start    ");
-                    lastPrint = pros::millis();
-                }
-                pros::delay(20);
+        pros::delay(60);
+        controller.print(2, 0, "X to start    ");
+        uint32_t lastPrint = pros::millis();
+        while (!controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_X)) {
+            // plugged into a switch/field after locking in: autonomous() starts the route
+            if (pros::competition::is_connected()) break;
+            if (pros::millis() - lastPrint > 250) {
+                controller.print(2, 0, "X to start    ");
+                lastPrint = pros::millis();
             }
-        }else{
-            return;
+            pros::delay(20);
         }
     }
 
     pickingAuton = false;
 }
 
+void competitionAutonSelector() {
+    int shown = -1;
+    uint32_t lastPrint = 0;
+    // PROS ends this task when the robot is enabled
+    while (true) {
+        pollControllerSelector(shown, lastPrint);
+        pros::delay(20);
+    }
+}
+
 bool autonRunning = false;
 
-void runAuton() { 
+void runAuton() {
     autonRunning = true; // keeps the driver button task off the arm/claw
     if (autons[selectedAuton].run) autons[selectedAuton].run();
     autonRunning = false;
+}
+
+void runSelectedAuton() {
+    AutonRoute& route = autons[selectedAuton];
+    // if it was locked in with X, the pose was already set there and odom has tracked since
+    if (!autonLocked && route.run) chassis.setPose(route.x, route.y, route.theta);
+    autonLocked = true;
+    runAuton();
 }

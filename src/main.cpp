@@ -232,6 +232,7 @@ bool armNeedsDown = true;
 bool isScoring = false;
 void initialize() {
     pros::lcd::initialize(); // initialize brain screen
+    registerBrainAutonSelector(); // brain left/right buttons pick the auton
     chassis.calibrate(); // calibrate sensors
     cascade_sensor.reset_position();
     arm_sensor.reset_position();
@@ -272,7 +273,9 @@ void initialize() {
             }
             double heading = std::fmod(chassis.getPose().theta, 360.0);
             if (heading < 0) heading += 360.0;
-            if (!pickingAuton) controller.print(2, 0, "%.4f", heading);
+            // while disabled on a switch/field, competitionAutonSelector() owns controller line 2
+            bool fieldDisabled = pros::competition::is_connected() && pros::competition::is_disabled();
+            if (!pickingAuton && !fieldDisabled) controller.print(2, 0, "%.4f", heading);
             pros::lcd::print(0, "X: %f", chassis.getPose().x); // x
             pros::lcd::print(1, "Y: %f", chassis.getPose().y); // y
             pros::lcd::print(2, "Theta: %f", heading); // heading
@@ -297,8 +300,11 @@ void initialize() {
     pros::Task armTask([&]() {
         while (pickingAuton) pros::delay(20); // driver buttons do nothing until X
         while (true) {
-            // auton drives the arm itself; R1Button's arm hold would fight it
-            if (autonRunning) {
+            // auton drives the arm itself; R1Button's arm hold would fight it.
+            // Also skip while disabled on a switch/field: the controller arrows are picking
+            // the auton then, and Right would otherwise open the claw and drop the preload.
+            bool fieldDisabled = pros::competition::is_connected() && pros::competition::is_disabled();
+            if (autonRunning || fieldDisabled) {
                 pros::delay(20);
                 continue;
             }
@@ -339,7 +345,7 @@ void disabled() {}
  * starts.
  */
 void competition_initialize() {
-    
+    competitionAutonSelector();
 }
 
 /**
@@ -357,19 +363,8 @@ void competition_initialize() {
 void autonomous() { 
 
     poseFusionEnabled = true;
-    autonRunning = true; // keeps the driver button task off the arm (R1Button's hold fights moveArmTo)
-
-    //north south
-    // chassis.setPose(0, 61.5, 0); //make sure to change this everything
-    // NorthSouthAuton(); //make sure to run correct one
-
-    // //east west 
-    chassis.setPose(61.5, 0, 90);  //make sure to change this everything
-    EastWestAuton();//make sure to run correct one
-
-    // //Skills 
-    // chassis.setPose(61.5, 0, 90); //make sure to change this everything
-    // SkillsAuton(); //make sure to run correct one
+    // runs whatever the brain/controller selector shows, from its start pose in autons[]
+    runSelectedAuton();
 }
 
 /**

@@ -146,9 +146,16 @@ extern pros::Controller controller;
 void runAuton();
 /// True while runAuton() is running. The driver button task in initialize() waits on it.
 extern bool autonRunning;
-/// Controller auton picker: Left/Right to choose, X to lock in. initialize() waits on it.
+/// Controller auton picker: Left/Right to choose, X to lock in. initialize() waits on it,
+/// except on a competition switch/field, where it returns right away.
 void autonSelector();
 extern bool pickingAuton;
+/// Brain left/right buttons step through the autons. Call after pros::lcd::initialize().
+void registerBrainAutonSelector();
+/// Controller Left/Right picker for competition_initialize(); runs until PROS ends it.
+void competitionAutonSelector();
+/// For autonomous(): sets the selected route's start pose (unless locked in with X), then runs it.
+void runSelectedAuton();
 
 // Tuning routines, callable from opcontrol() for testing.
 void darwin_test();
