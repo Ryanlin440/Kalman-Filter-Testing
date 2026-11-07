@@ -32,6 +32,15 @@ pros::Distance frontSensor(15);
 pros::Distance leftSensor(17);
 pros::Distance rightSensor(8);
 
+// Which device goes with each sensor name in include/localization/robot_config.hpp (positions live
+// there). Used by the UKF, distanceReset() and offsetTuner(). Add a line when you add a sensor.
+pros::Distance* distanceSensorFor(const char* name) {
+    if (std::strcmp(name, "front") == 0) return &frontSensor;
+    if (std::strcmp(name, "right") == 0) return &rightSensor;
+    if (std::strcmp(name, "left") == 0) return &leftSensor;
+    return nullptr;
+}
+
 ScaledImu imu(5, 1.0032, 1.0047); // left, right scales from spinTest(); right averages half + full speed runs
 // ScaledImu imu(5, 1.0000, 1.0000); // left, right scales from spinTest(); right averages half + full speed runs
 pros::Rotation vertical_rotation_sensor(-21);
@@ -271,11 +280,18 @@ void initialize() {
                 pros::delay(100);
                 continue;
             }
-            double heading = std::fmod(chassis.getPose().theta, 360.0);
+            lemlib::Pose pose = chassis.getPose();
+            double heading = std::fmod(pose.theta, 360.0);
             if (heading < 0) heading += 360.0;
             // while disabled on a switch/field, competitionAutonSelector() owns controller line 2
             bool fieldDisabled = pros::competition::is_connected() && pros::competition::is_disabled();
-            if (!pickingAuton && !fieldDisabled) controller.print(2, 0, "%.4f", heading);
+            // pose as "x y heading"; the controller drops prints sent less than ~50 ms apart
+            static uint32_t lastControllerPrint = 0;
+            if (!pickingAuton && !fieldDisabled && !offsetTunerActive &&
+                pros::millis() - lastControllerPrint >= 60) {
+                controller.print(2, 0, "%5.1f %5.1f %3.0f ", pose.x, pose.y, heading);
+                lastControllerPrint = pros::millis();
+            }
             pros::lcd::print(0, "X: %f", chassis.getPose().x); // x
             pros::lcd::print(1, "Y: %f", chassis.getPose().y); // y
             pros::lcd::print(2, "Theta: %f", heading); // heading
@@ -294,7 +310,8 @@ void initialize() {
         }
     });
 
-    startPoseFusion(); // blends distance sensors into odom; gains on line 7
+    if (USE_UKF) startUkf(); // UKF owns the pose; status on line 7
+    else startPoseFusion(); // blends distance sensors into odom; gains on line 7
     // startWallEstimatePrinter(); // raw distance-sensor x/y on line 7 instead (turn off fusion first)
 
     pros::Task armTask([&]() {
@@ -303,8 +320,9 @@ void initialize() {
             // auton drives the arm itself; R1Button's arm hold would fight it.
             // Also skip while disabled on a switch/field: the controller arrows are picking
             // the auton then, and Right would otherwise open the claw and drop the preload.
+            // Same for offsetTuner(), which uses the controller buttons.
             bool fieldDisabled = pros::competition::is_connected() && pros::competition::is_disabled();
-            if (autonRunning || fieldDisabled) {
+            if (autonRunning || fieldDisabled || offsetTunerActive) {
                 pros::delay(20);
                 continue;
             }
@@ -363,6 +381,7 @@ void competition_initialize() {
 void autonomous() { 
 
     poseFusionEnabled = true;
+    ukfEnabled = true;
     // runs whatever the brain/controller selector shows, from its start pose in autons[]
     runSelectedAuton();
 }
@@ -420,11 +439,13 @@ void opcontrol() {
     */
 
     // spinTest();
+    // offsetTuner(); // distance sensor offsets: robot square on x = 0 or y = 0, B to exit
 
     // tuningPID();
     // pros::delay(10000);
     distanceReset();
     poseFusionEnabled=false;
+    ukfEnabled = true; // UKF keeps running in driver control
     // tuningPID();
     // pros::delay(1000000);
     moveArmTo(downArmDegPinAndCup);

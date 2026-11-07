@@ -1,10 +1,10 @@
 #include "robot.h"
+#include "localization/robot_config.hpp"
 #include <cmath>
 #include <cstdio>
 
 namespace {
 
-constexpr double FIELD_HALF = 140.5 / 2;
 // V5 distance sensor limits, in inches.
 constexpr double MAX_RANGE = 78.74;
 constexpr double MIN_RANGE = 0.8;
@@ -24,11 +24,31 @@ struct SensorMount {
     double maxRange = MAX_RANGE; // inches, readings past this are ignored
 };
 
-const SensorMount mounts[] = {
-    {&frontSensor, 4, 1.6, 0, "front"},//change later cause cad isn't perfect
-    {&rightSensor, 3.75+1.5, .268, 90, "right", 50},
-    {&leftSensor, -3.75-.2, .268, 270, "left"},
+// Sensor positions and the field size come from include/localization/robot_config.hpp, shared with
+// the UKF and offsetTuner(), so they only get changed in one place. Which pros::Distance each
+// sensor is comes from distanceSensorFor() in main.cpp.
+constexpr int MAX_MOUNTS = 8;
+
+struct MountTable {
+    SensorMount mounts[MAX_MOUNTS];
+    int count = 0;
+    double fieldHalf = 0;
 };
+
+const MountTable& mountTable() {
+    static const MountTable table = [] {
+        MountTable t;
+        loc::RobotConfig cfg = loc::littleX();
+        t.fieldHalf = cfg.fieldHalf;
+        for (const loc::DistanceSensorConfig& s : cfg.sensors) {
+            pros::Distance* device = distanceSensorFor(s.name);
+            if (!device || t.count == MAX_MOUNTS) continue;
+            t.mounts[t.count++] = {device, s.right, s.forward, s.angleDeg, s.name, s.maxRange};
+        }
+        return t;
+    }();
+    return table;
+}
 
 // Reading in inches, comparing in mm cause thats what it returns
 double readInches(pros::Distance& sensor, int& mm, int& conf, double maxRange = MAX_RANGE) {
@@ -49,10 +69,10 @@ struct WallReading {
     const char* name;
 };
 
-constexpr int NUM_MOUNTS = sizeof(mounts) / sizeof(mounts[0]);
-
-int wallReadings(const lemlib::Pose& pose, WallReading out[NUM_MOUNTS], bool log = false,
+int wallReadings(const lemlib::Pose& pose, WallReading out[MAX_MOUNTS], bool log = false,
                  const pros::Distance* skipSensor = nullptr) {
+    const MountTable& table = mountTable();
+    const double FIELD_HALF = table.fieldHalf;
     double t = pose.theta * DEG_TO_RAD;
     double sinT = std::sin(t);
     double cosT = std::cos(t);
@@ -60,7 +80,8 @@ int wallReadings(const lemlib::Pose& pose, WallReading out[NUM_MOUNTS], bool log
 
     if (log) std::printf("pose (%.2f, %.2f, %.1f)\n", pose.x, pose.y, pose.theta);
 
-    for (const SensorMount& m : mounts) {
+    for (int i = 0; i < table.count; i++) {
+        const SensorMount& m = table.mounts[i];
         if (m.sensor == skipSensor) continue;
         // sensor offset from robot center
         double dx = m.offX * cosT + m.offY * sinT;
@@ -119,7 +140,7 @@ int wallReadings(const lemlib::Pose& pose, WallReading out[NUM_MOUNTS], bool log
 
 void wallEstimate(double& x, bool& hasX, double& y, bool& hasY, bool log = false,
                   const pros::Distance* skipSensor = nullptr) {
-    WallReading readings[NUM_MOUNTS];
+    WallReading readings[MAX_MOUNTS];
     int count = wallReadings(chassis.getPose(), readings, log, skipSensor);
     double xSum = 0, ySum = 0;
     double xWeight = 0, yWeight = 0;
@@ -208,7 +229,7 @@ void startPoseFusion() {
             double gain[2] = {-1, -1}; // last K used per axis, -1 
             bool turningFast = std::fabs(imu.get_gyro_rate().z) > FUSE_MAX_TURN_RATE;
             if (poseFusionEnabled && !turningFast) {
-                WallReading readings[NUM_MOUNTS];
+                WallReading readings[MAX_MOUNTS];
                 int count = wallReadings(pose, readings, log);
 
                 // update

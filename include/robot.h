@@ -39,6 +39,8 @@ extern pros::Distance rightSensor;
 extern pros::Distance backBottomSensor;
 extern pros::Distance backTopSensor;
 extern pros::Distance claw_sensor;
+/// The pros::Distance for a sensor name in include/localization/robot_config.hpp, or nullptr.
+pros::Distance* distanceSensorFor(const char* name);
 
 
 // The V5 IMU under-reads turns slightly, and by a different amount each way.
@@ -163,6 +165,11 @@ void frictiontest();
 void torquetest();
 void tuningPID();
 void spinTest();
+/// Distance sensor offset tuner (src/offset_tuner.cpp). Blocks until B. Put the robot's center
+/// square on x = 0 or y = 0; it calculates the offset each sensor needs to read exactly that.
+void offsetTuner();
+/// True while offsetTuner() runs; the arm button task and controller pose line stay out of the way.
+extern bool offsetTunerActive;
 /// Thread-safe brain screen print for lines 5-7 (the screen task draws it).
 /// Use this instead of pros::lcd::print anywhere outside the screen task.
 void screenPrint(int line, const char* fmt, ...);
@@ -209,6 +216,16 @@ void startWallEstimatePrinter();
 void startPoseFusion();
 /// Set false to pause the blending (odom uncertainty still grows while paused).
 extern bool poseFusionEnabled;
+
+/// Localization: true = the UKF (src/localization/ukf_task.cpp), false = startPoseFusion() above.
+inline constexpr bool USE_UKF = true;
+/// Starts the UKF task: tracking wheels + IMU + distance sensors -> chassis.setPose() every 10 ms.
+/// A chassis.setPose() from anywhere else (auton start pose, distanceReset()) restarts the filter there.
+/// Prints its uncertainty on brain line 7 and logs to /usd/ukf_log.csv if an SD card is in.
+/// Robot geometry and tuning: include/localization/robot_config.hpp.
+void startUkf();
+/// Set false to pause the UKF; LemLib's odometry runs alone and the UKF picks up from there.
+extern bool ukfEnabled;
 
 void EastWestAuton();
 void SkillsAuton();
