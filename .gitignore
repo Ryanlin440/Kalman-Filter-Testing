@@ -14,4 +14,5 @@ compile_commands.json
 temp.log
 temp.errors
 *.ini
-.d/.DS_Store
+.d/
+.DS_Store
