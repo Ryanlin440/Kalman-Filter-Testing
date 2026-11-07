@@ -48,89 +48,6 @@ pros::Rotation horizontal_rotation_sensor(4);
 lemlib::TrackingWheel vertical_tracking_wheel(&vertical_rotation_sensor, lemlib::Omniwheel::NEW_2, -.55);
 lemlib::TrackingWheel horizontal_tracking_wheel(&horizontal_rotation_sensor, lemlib::Omniwheel::NEW_2, -1.5);
 
-pros::MotorGroup cascade ({1, -2}, pros::v5::MotorGears::blue);//2 11w
-pros::Rotation cascade_sensor(-3);
-lemlib::PID cascade_pid(250,-.1,150,10); // old (5,0,20) per degree, scaled to per inch
-float getCascadeInches() {
-    return (cascade_sensor.get_position() / 100.0f) * INCHES_PER_DEGREE;
-}
-void moveCascadeTo(double targetInches, int timeoutMs) {
-    cascade_pid.reset();
-    uint32_t start = pros::millis();
-    
-    while (true) {
-        float current_pos_inches = getCascadeInches();
-        float error = targetInches - current_pos_inches;
-        float output = cascade_pid.update(error);
-
-        output = std::clamp(output, -127.0f, 127.0f);
-        cascade.move(output);
-
-        // stop moving if the target reached or if timer run out
-        if (std::abs(error) < .3 || pros::millis() - start > (uint32_t)timeoutMs) {
-            cascade.set_brake_mode(pros::MotorBrake::hold);
-            cascade.move_velocity(0);
-            break;
-        }
-        pros::delay(10);
-    }
-}
-
-// TODO: placeholder port/gearset -- update to the real toggles port(s)
-bool clawBool = false;
-pros::adi::DigitalOut clawShut(7, clawBool);
-// TODO: placeholder ADI ports -- update to the real toggle ports
-bool flipBool = false;
-pros::adi::DigitalOut toggles(8, false);
-
-pros::Distance claw_sensor(9);
-// pros::Distance backTopSensor(8);
-
-pros::MotorGroup arm_motor ({6, -7}, pros::v5::MotorGears::green);//2 5.5
-pros::Rotation arm_sensor(10);
-lemlib::PID arm_pid(8,0,150,0);     
-lemlib::PID arm_hold_pid(7,0,50,0); 
-
-void moveArmTo(double target, int timeoutMs, float maxSpeed) {
-    arm_pid.reset();
-    uint32_t start = pros::millis();
-    while (true) {
-        float current_pos = arm_sensor.get_position() / 100.0; 
-        float error = target - current_pos;
-        float output = arm_pid.update(error);
-        
-        output = std::clamp(output, -maxSpeed, maxSpeed); 
-        
-        arm_motor.move(output);
-        if (std::abs(error) < 15.0 || pros::millis() - start > (uint32_t)timeoutMs) {
-            arm_motor.move(0);
-            break;
-        }
-        pros::delay(10);
-    }
-}
-
-void moveArmToHold(double target, int timeoutMs, float maxSpeed) {
-    arm_hold_pid.reset();
-    uint32_t start = pros::millis();
-    while (true) {
-        float current_pos = arm_sensor.get_position() / 100.0; 
-        float error = target - current_pos;
-        float output = arm_hold_pid.update(error);
-        
-        output = std::clamp(output, -maxSpeed, maxSpeed); 
-
-        arm_motor.move_velocity(output);
-        if (std::abs(error) < 15.0 || pros::millis() - start > (uint32_t)timeoutMs) {
-            arm_motor.set_brake_mode(pros::MotorBrake::hold);
-            arm_motor.move_velocity(0);
-            break;
-        }
-        pros::delay(10);
-    }
-}
-
-
 lemlib::OdomSensors sensors(&vertical_tracking_wheel, // vertical tracking wheel 1, set to null
                             nullptr, // vertical tracking wheel 2, set to nullptr as we are using IMEs
                             &horizontal_tracking_wheel, // horizontal tracking wheel 1
@@ -234,29 +151,15 @@ void on_center_button() {
  * All other competition modes are blocked by initialize; it is recommended
  * to keep execution time for this mode under a few seconds.
  */
-int pressNum = 0;
 // Cleared by turnTunerAuton() so the screen task stops overwriting its readout.
 bool printingDistances = true;
-bool armNeedsDown = true;
-bool isScoring = false;
 void initialize() {
     pros::lcd::initialize(); // initialize brain screen
     registerBrainAutonSelector(); // brain left/right buttons pick the auton
     chassis.calibrate(); // calibrate sensors
-    cascade_sensor.reset_position();
-    arm_sensor.reset_position();
-    arm_motor.set_brake_mode(pros::MotorBrake::hold);
-    cascade.set_brake_mode(pros::MotorBrake::hold);
 
-    arm_motor.move_velocity(0);
-    cascade.move_velocity(0);
 
-    // Start with claw clamped so we can have a pin.
-    clawBool = true;
-    clawShut.set_value(true);
 
-    // So we aren't touching the toggle when match starts
-    toggleMechUp();
 
     pros::Task screenTask([&]() {
         while (true) {
@@ -287,7 +190,7 @@ void initialize() {
             bool fieldDisabled = pros::competition::is_connected() && pros::competition::is_disabled();
             // pose as "x y heading"; the controller drops prints sent less than ~50 ms apart
             static uint32_t lastControllerPrint = 0;
-            if (!pickingAuton && !fieldDisabled && !offsetTunerActive &&
+            if (!pickingAuton && !fieldDisabled && !tuningToolActive &&
                 pros::millis() - lastControllerPrint >= 60) {
                 controller.print(2, 0, "%5.1f %5.1f %3.0f ", pose.x, pose.y, heading);
                 lastControllerPrint = pros::millis();
@@ -296,7 +199,6 @@ void initialize() {
             pros::lcd::print(1, "Y: %f", chassis.getPose().y); // y
             pros::lcd::print(2, "Theta: %f", heading); // heading
             pros::lcd::print(3, "Front sensor: %.2f", (double)(frontSensor.get() / 25.4));
-            pros::lcd::print(4, "Cascade (in): %.3f", (double)getCascadeInches());
             char messages[3][48];
             screenMutex.take();
             std::memcpy(messages, screenMessages, sizeof(messages));
@@ -314,30 +216,7 @@ void initialize() {
     else startPoseFusion(); // blends distance sensors into odom; gains on line 7
     // startWallEstimatePrinter(); // raw distance-sensor x/y on line 7 instead (turn off fusion first)
 
-    pros::Task armTask([&]() {
-        while (pickingAuton) pros::delay(20); // driver buttons do nothing until X
-        while (true) {
-            // auton drives the arm itself; R1Button's arm hold would fight it.
-            // Also skip while disabled on a switch/field: the controller arrows are picking
-            // the auton then, and Right would otherwise open the claw and drop the preload.
-            // Same for offsetTuner(), which uses the controller buttons.
-            bool fieldDisabled = pros::competition::is_connected() && pros::competition::is_disabled();
-            if (autonRunning || fieldDisabled || offsetTunerActive) {
-                pros::delay(20);
-                continue;
-            }
-            L1Button();
-
-            L2Button();
-
-            R1Button();
-
-            RightArrowButton();
-            
-
-            pros::delay(50);
-            }
-        });
+    
 
     autonSelector(); 
     if (!pros::competition::is_connected()) {
@@ -424,34 +303,9 @@ void opcontrol() {
     // the field kills autonomous() at 15 s, so it never gets to clear this itself
     autonRunning = false;
 
-    /*
-    // loop forever
-    // autonomous();
-
-    // rotationChassisPID();
-    // linearChassisPID();
-    
-    // return;
-    // while(true){
-    //     arm_motor.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-    //     arm_motor.move_velocity(0);
-    // }
-    */
-
-    // spinTest();
-    // offsetTuner(); // distance sensor offsets: robot square on x = 0 or y = 0, B to exit
-
-    // tuningPID();
-    // pros::delay(10000);
-    distanceReset();
     poseFusionEnabled=false;
     ukfEnabled = true; // UKF keeps running in driver control
-    // tuningPID();
-    // pros::delay(1000000);
-    moveArmTo(downArmDegPinAndCup);
-    moveCascadeTo(cascadeRestHeight, 800);
-    
-    // autonomous();
+       // autonomous();
     while (true) {
 
         // get left y and right y positions
@@ -460,258 +314,9 @@ void opcontrol() {
 
         // move the robot
         chassis.arcade(leftY, rightX);
-        // if(controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_LEFT)){
-        //     moveCascadeTo(10);
-        // }else if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_RIGHT)){
-        //     moveCascadeTo(0);
-        // }
-
-        if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_UP)){
-            distanceReset();
-            // moveCascadeTo(6,5000);
-        }
-        if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)){
-            distanceReset();
-            // moveCascadeTo(0,5000);
-        }
-
-        if (!isScoring){
-            double cascadePos = getCascadeInches();
             
-            if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_B)){
-                cascade.move(127); // Move Up
-            }
-            else if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2)){
-                // Only allow reverse if it is above 0
-                if (cascadePos > 0.011) {
-                    cascade.move(-127);
-                } else {
-                    cascade.move(0); // Lock it at the bottom
-                }
-            }
-            else{
-                cascade.move(0); // Brake mode HOLD kicks in here
-            }
-        }
-        
-        toggleMech();
-        
         // delay to save resources
         pros::delay(25);
     }
 }
 
-void L1Button() {
-    static bool l1WasPressed = false;
-    static bool autoClampedThisPress = false;
-
-    bool l1CurrentlyPressed = controller.get_digital(pros::E_CONTROLLER_DIGITAL_L1);
-
-    // check if need to move arm back down after prime
-    if (l1CurrentlyPressed && !l1WasPressed) {
-        if (pressNum == 1) {
-            // abort the score priming
-            pressNum = 0; 
-            
-            moveCascadeTo(cascadeRestHeight, 600); 
-            
-            moveArmTo(downArmDegPinAndCup, 2000, 127.0f); 
-            
-            armNeedsDown = true;
-            
-            autoClampedThisPress = true; 
-        } else {
-            autoClampedThisPress = false; 
-        }
-    }
-    
-    // auto-clamp when held down
-    if (l1CurrentlyPressed) {
-        if (clawBool == false && !autoClampedThisPress) {
-            if (claw_sensor.get_distance() < 50) {
-                autoClampedThisPress = true;
-                isScoring = true;
-                
-                // Lower cascade and arm
-                clampClaw();
-                pros::delay(150);
-                
-                // return to resting height
-                moveCascadeTo(cascadeRestHeight, 600); 
-                moveArmTo(downArmDegPinAndCup, 600, 127.0f); 
-                armNeedsDown = true; 
-                
-                isScoring = false;
-            }
-        }
-    }
-
-    // Manual clamp/release
-    if (!l1CurrentlyPressed && l1WasPressed) {
-        if (!autoClampedThisPress) {
-            
-            // if it's open then manual clamp
-            if (clawBool == false) {
-                isScoring = true;
-                
-                clampClaw();
-                pros::delay(150); 
-                // return to resting height
-                moveCascadeTo(cascadeRestHeight, 600); 
-                moveArmTo(downArmDegPinAndCup, 600, 127.0f); 
-                armNeedsDown = true;
-                
-                isScoring = false;
-            } 
-            // If closed then manually drop object (single pin scoring)
-            else {
-                isScoring = true;
-                
-                // open claw
-                clawBool = false;
-                clawShut.set_value(false);
-                
-                isScoring = false;
-            }
-        }
-    }
-
-    l1WasPressed = l1CurrentlyPressed;
-}
-
-void L2Button() {
-    if (clawBool == true && controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_L2)) {
-        isScoring = true;
-
-        // lower cascade to 0
-        moveCascadeTo(cascadeClampingHeight, 600);
-        moveArmTo(downArmDegJustPin, 600);
-
-        // open claw for a small interval to release cup
-        clawShut.set_value(false);
-        pros::delay(75);
-        clawShut.set_value(true);
-        pros::delay(150);
-        
-        // return arm to resting height
-        moveCascadeTo(cascadeRestHeight, 600);
-        moveArmTo(downArmDegPinAndCup, 600);
-        armNeedsDown = true;
-        
-        isScoring = false;
-    }
-}
-
-void R1Button(){
-    if(controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_R1)){//ARM movement
-
-        if(pressNum == 0){
-            // arm_hold_pid.reset();
-            armNeedsDown = false;
-            pressNum = 1;
-            moveArmToHold(450);
-            screenPrint(5, "priming...");
-        }else if (pressNum==1){
-            isScoring = true;
-            screenPrint(5, "scoring...");
-            cascade.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-            //moveCascadeTo(660);
-            cascade.move_velocity(0);
-            if (getCascadeInches() < 3) {
-                moveArmTo(650, 1000, 95.0f);
-            } else {
-                moveArmTo(600, 1000, 95.0f);
-            }
-            
-            pressNum=0;
-            clawShut.set_value(false);
-            clawBool=false;
-            armNeedsDown = true;
-            cascade.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-            pros::delay(100);
-            moveCascadeTo(getCascadeInches() + cascadeLiftOffset, 500);
-            pros::delay(150);
-            pros::Task armReturn([]() {
-                moveArmToHold(downArmDegPinAndCup);
-            });
-            if (getCascadeInches() > 15) {
-                pros::delay(250);
-            } else {
-                pros::delay(150);
-            }
-            moveCascadeTo(cascadeRestHeight);
-            // wait for the arm so the armNeedsDown hold below doesn't stop it mid-move
-            armReturn.join();
-            isScoring = false;
-        }
-        //if(armNeedsDown) moveArmTo(downArmDegPinAndCup+50);
-    }
-     if(armNeedsDown) {
-        arm_motor.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
-        arm_motor.move_velocity(0);
-     }
-};
-
-void RightArrowButton(){
-    if(controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_RIGHT)){//ARM movement
-        isScoring = true;
-                
-        // lower cascade
-        moveCascadeTo(cascadeClampingHeight, 600);
-        
-        // open claw
-        clawBool = false;
-        clawShut.set_value(false);
-
-        // wait for driver to back away
-        double startPosition = left_motors.get_position(); 
-        uint32_t waitStart = pros::millis();
-        
-        while (true) {
-            double currentPosition = left_motors.get_position();
-            double degreesMoved = std::abs(currentPosition - startPosition);
-            
-            // timeout if takes too long
-            if (degreesMoved > 150.0 || pros::millis() - waitStart > 1000) {
-                break;
-            }
-            pros::delay(10); 
-        }
-        
-        // return to resting height
-        moveCascadeTo(cascadeRestHeight, 600);
-        armNeedsDown = true;
-        
-        isScoring = false;
-    }
-};
-
-void toggleMech(){
-    if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)){
-        toggles.set_value(true);
-        // pros::delay(1000);
-    }else{
-        toggles.set_value(false);
-    }
-};
-
-void toggleMechUp(){
-    toggles.set_value(true);
-};
-
-void toggleMechDown(){
-    toggles.set_value(false);
-};
-void clampClaw(){
-    // lower the cascade
-    
-    pros::Task armTask([&]() {
-        moveCascadeTo(cascadeClampingHeight, 400); 
-        moveArmTo(downArmDegPinAndCupClamping, 600, 30.0f);
-    });
-    pros::delay(300);
-    // grab object
-    clawBool = true;
-    clawShut.set_value(true);
-    // pros::delay(150); 
-}

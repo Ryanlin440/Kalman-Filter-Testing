@@ -22,7 +22,7 @@
 #include "localization/robot_config.hpp"
 #include "robot.h"
 
-bool offsetTunerActive = false;
+bool tuningToolActive = false;
 
 namespace {
 
@@ -74,7 +74,7 @@ void offsetTuner() {
     int count = (int)cfg.sensors.size();
     if (count == 0) return;
 
-    offsetTunerActive = true; // pauses the arm/claw buttons and the controller pose line
+    tuningToolActive = true; // pauses the controller pose line
     int sensor = 0;
     int headingChoice = 0;
     Solution best[16]; // last solution per sensor, for the table at the end
@@ -163,5 +163,5 @@ void offsetTuner() {
     screenPrint(5, "offset tuner done, table in terminal");
     screenPrint(6, "");
     controller.clear();
-    offsetTunerActive = false;
+    tuningToolActive = false;
 }
