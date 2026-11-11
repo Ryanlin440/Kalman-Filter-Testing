@@ -16,34 +16,48 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
-pros::MotorGroup right_motors({11, 12, -13}, pros::MotorGearset::blue); // left motors use 600 RPM cartridges
-pros::MotorGroup left_motors({-20, -19, 18}, pros::MotorGearset::blue); // right motors use 200 RPM cartridges
-// drivetrain settings
-lemlib::Drivetrain drivetrain(&left_motors, // left motor group
-                              &right_motors, // right motor group
-                              12.6, // 10 inch track width
-                              lemlib::Omniwheel::NEW_275, // using new 4" omnis
-                              450, // drivetrain rpm is 360
-                              2 // horizontal drift is 2 (for now)
-);
+////////////////////////////////////////////////////////////////////////////////////
+pros::MotorGroup right_motors({11, 12, -13}, 
+    pros::MotorGearset::blue); 
+pros::MotorGroup left_motors({-20, -19, 18},
+     pros::MotorGearset::blue);
 
-// pros::Distance backSensor(20);
+lemlib::Drivetrain drivetrain(&left_motors, 
+                              &right_motors,
+                              12.6,
+                              lemlib::Omniwheel::NEW_275,
+                              450,
+                              2
+);
+////////////////////////////////////////////////////////////////////////////////////
 pros::Distance frontSensor(15);
 pros::Distance leftSensor(17);
 pros::Distance rightSensor(8);
+pros::Distance claw_sensor(9);
+////////////////////////////////////////////////////////////////////////////////////
 
 ScaledImu imu(5, 1.0032, 1.0047); // left, right scales from spinTest(); right averages half + full speed runs
 // ScaledImu imu(5, 1.0000, 1.0000); // left, right scales from spinTest(); right averages half + full speed runs
+
+////////////////////////////////////////////////////////////////////////////////////
 pros::Rotation vertical_rotation_sensor(-21);
 pros::Rotation horizontal_rotation_sensor(4);
-lemlib::TrackingWheel vertical_tracking_wheel(&vertical_rotation_sensor, lemlib::Omniwheel::NEW_2, -.55);
-lemlib::TrackingWheel horizontal_tracking_wheel(&horizontal_rotation_sensor, lemlib::Omniwheel::NEW_2, -1.5);
-
-pros::MotorGroup cascade ({1, -2}, pros::v5::MotorGears::blue);//2 11w
+lemlib::TrackingWheel vertical_tracking_wheel(
+    &vertical_rotation_sensor, 
+    lemlib::Omniwheel::NEW_2, -.55);
+lemlib::TrackingWheel horizontal_tracking_wheel(
+    &horizontal_rotation_sensor, 
+    lemlib::Omniwheel::NEW_2, -1.5);
+////////////////////////////////////////////////////////////////////////////////////
+pros::MotorGroup cascade ({1, -2}, pros::v5::MotorGears::blue);
 pros::Rotation cascade_sensor(-3);
-lemlib::PID cascade_pid(250,-.1,150,10); // old (5,0,20) per degree, scaled to per inch
+lemlib::PID cascade_pid(250,-.1,150,10);
+////////////////////////////////////////////////////////////////////////////////////
+
 float getCascadeInches() {
-    return (cascade_sensor.get_position() / 100.0f) * INCHES_PER_DEGREE;
+    return (
+        cascade_sensor.get_position() / 100.0f
+    ) * INCHES_PER_DEGREE;
 }
 void moveCascadeTo(double targetInches, int timeoutMs) {
     cascade_pid.reset();
@@ -54,34 +68,40 @@ void moveCascadeTo(double targetInches, int timeoutMs) {
         float error = targetInches - current_pos_inches;
         float output = cascade_pid.update(error);
 
-        output = std::clamp(output, -127.0f, 127.0f);
+        output = std::clamp(
+            output, -127.0f, 127.0f
+        );
         cascade.move(output);
 
-        // stop moving if the target reached or if timer run out
-        if (std::abs(error) < .3 || pros::millis() - start > (uint32_t)timeoutMs) {
-            cascade.set_brake_mode(pros::MotorBrake::hold);
+        // Stop moving if the target reached
+        // or if timer runs out
+        if (std::abs(error) < .3 || 
+            pros::millis() - start > (uint32_t)timeoutMs) {
+
+            cascade.set_brake_mode(
+                pros::MotorBrake::hold
+            );
             cascade.move_velocity(0);
             break;
         }
         pros::delay(10);
     }
 }
-
-// TODO: placeholder port/gearset -- update to the real toggles port(s)
+////////////////////////////////////////////////////////////////////////////////////
 bool clawBool = false;
-pros::adi::DigitalOut clawShut(7, clawBool);
-// TODO: placeholder ADI ports -- update to the real toggle ports
 bool flipBool = false;
-pros::adi::DigitalOut toggles(8, false);
-
-pros::Distance claw_sensor(9);
-// pros::Distance backTopSensor(8);
-
-pros::MotorGroup arm_motor ({6, -7}, pros::v5::MotorGears::green);//2 5.5
+pros::adi::DigitalOut clawShut(7, clawBool);
+pros::adi::DigitalOut toggles(8, flipBool);
+////////////////////////////////////////////////////////////////////////////////////
+pros::MotorGroup arm_motor ({6, -7},
+     pros::v5::MotorGears::green);
 pros::Rotation arm_sensor(10);
+
 lemlib::PID arm_pid(8,0,150,0);     
 lemlib::PID arm_hold_pid(7,0,50,0); 
+////////////////////////////////////////////////////////////////////////////////////
 
+////////////////////////////////////////////////////////////////////////////////////
 void moveArmTo(double target, int timeoutMs, float maxSpeed) {
     arm_pid.reset();
     uint32_t start = pros::millis();
@@ -93,13 +113,15 @@ void moveArmTo(double target, int timeoutMs, float maxSpeed) {
         output = std::clamp(output, -maxSpeed, maxSpeed); 
         
         arm_motor.move(output);
-        if (std::abs(error) < 15.0 || pros::millis() - start > (uint32_t)timeoutMs) {
+        if (std::abs(error) < 15.0 || 
+            pros::millis() - start > (uint32_t)timeoutMs) {
             arm_motor.move(0);
             break;
         }
         pros::delay(10);
     }
 }
+////////////////////////////////////////////////////////////////////////////////////
 
 void moveArmToHold(double target, int timeoutMs, float maxSpeed) {
     arm_hold_pid.reset();
@@ -128,53 +150,43 @@ lemlib::OdomSensors sensors(&vertical_tracking_wheel, // vertical tracking wheel
                             nullptr, // horizontal tracking wheel 2, set to nullptr as we don't have a second one
                             &imu // inertial sensor
 );
+////////////////////////////////////////////////////////////////////////////////////
 // lateral PID controller
-lemlib::ControllerSettings lateral_controller(7.5, // proportional gain (kP)
-                                              -.0005, // integral gain (kI)
-                                              35, // derivative gain (kD)
-                                              0, // anti windup
-                                              1, // small error range, in inches
-                                              100, // small error range timeout, in milliseconds
-                                              3, // large error range, in inches
-                                              500, // large error range timeout, in milliseconds
-                                              0 // maximum acceleration (slew)
+lemlib::ControllerSettings lateral_controller(
+    7.5,
+    -.0005,
+    35,
+    0,
+    1, 
+    100,
+    3,
+    500, 
+    0
 );
-
-
-// lemlib::ControllerSettings lateral_controller(6, // proportional gain (kP)
-//                                               0.01, // integral gain (kI)
-//                                               30, // derivative gain (kD)
-//                                               5, // anti windup
-//                                               1, // small error range, in inches
-//                                               100, // small error range timeout, in milliseconds
-//                                               3, // large error range, in inches
-//                                               500, // large error range timeout, in milliseconds
-//                                               0 // maximum acceleration (slew)
-// );
 
 // angular PID controller
-lemlib::ControllerSettings angular_controller(1.6, // proportional gain (kP)
-                                              .00, // integral gain (kI)
-                                              9, // derivative gain (kD)
-                                              0, // anti windup
-                                              1, // small error range, in degrees
-                                              100, // small error range timeout, in milliseconds
-                                            3, // large error range, in degrees
-                                              300, // large error range timeout, in milliseconds
-                                              0 // maximum acceleration (slew)
+lemlib::ControllerSettings angular_controller(
+    1.6, 
+    .00,
+    9,
+    0,
+    1,
+    100,
+    3,
+    300,
+    0
+);
+////////////////////////////////////////////////////////////////////////////////////
+lemlib::ExpoDriveCurve throttle_curve(3, 
+                                     10, 
+                                     1.025 
 );
 
-// input curve for throttle input during driver control
-lemlib::ExpoDriveCurve throttle_curve(3, // joystick deadband out of 127
-                                     10, // minimum output where drivetrain will move out of 127
-                                     1.025 // expo curve gain
+lemlib::ExpoDriveCurve steer_curve(3,
+                                  10,
+                                  1.025
 );
-//both previously 1.019
-// input curve for steer input during driver control
-lemlib::ExpoDriveCurve steer_curve(3, // joystick deadband out of 127
-                                  10, // minimum output where drivetrain will move out of 127
-                                  1.025 // expo curve gain
-);
+////////////////////////////////////////////////////////////////////////////////////
 lemlib::Chassis chassis(drivetrain, // drivetrain settings
                         lateral_controller, // lateral PID settings
                         angular_controller, // angular PID settings
@@ -183,17 +195,9 @@ lemlib::Chassis chassis(drivetrain, // drivetrain settings
                         &steer_curve
 );
 pros::Controller controller(pros::E_CONTROLLER_MASTER);
+////////////////////////////////////////////////////////////////////////////////////
 
-/**
- * A callback function for LLEMU's center button.
- *
- * When this callback is fired, it will toggle line 2 of the LCD text between
- * "I was pressed!" and nothing.
- */
-// The brain screen (LVGL) isn't thread-safe: calling pros::lcd from two tasks
-// at once corrupts it and can crash the brain (DATA ABORT in lv_obj_style.c).
-// So only the screen task in initialize() draws. Everything else calls
-// screenPrint(), which saves the text for the screen task to draw on lines 5-7.
+
 pros::Mutex screenMutex;
 char screenMessages[3][48] = {};
 
@@ -225,8 +229,9 @@ void on_center_button() {
  * All other competition modes are blocked by initialize; it is recommended
  * to keep execution time for this mode under a few seconds.
  */
+
+
 int pressNum = 0;
-// Cleared by turnTunerAuton() so the screen task stops overwriting its readout.
 bool printingDistances = true;
 bool armNeedsDown = true;
 bool isScoring = false;
@@ -255,6 +260,7 @@ void initialize() {
                 pros::delay(40);
                 continue;
             }
+            /*
             if (spinTestActive) {
                 double rotation = spinTestRotation;
                 double turns = std::round(std::fabs(rotation) / 360.0);
@@ -270,6 +276,7 @@ void initialize() {
                 pros::delay(100);
                 continue;
             }
+            */
             double heading = std::fmod(chassis.getPose().theta, 360.0);
             if (heading < 0) heading += 360.0;
             if (!pickingAuton) controller.print(2, 0, "%.4f", heading);
@@ -292,7 +299,6 @@ void initialize() {
     });
 
     startPoseFusion(); // blends distance sensors into odom; gains on line 7
-    // startWallEstimatePrinter(); // raw distance-sensor x/y on line 7 instead (turn off fusion first)
 
     pros::Task armTask([&]() {
         while (pickingAuton) pros::delay(20); // driver buttons do nothing until X
@@ -438,50 +444,61 @@ void opcontrol() {
     // autonomous();
     while (true) {
 
-        // get left y and right y positions
-        int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
-        int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
+    //     // get left y and right y positions
+    //     int leftY = controller.get_analog(pros::E_CONTROLLER_ANALOG_LEFT_Y);
+    //     int rightX = controller.get_analog(pros::E_CONTROLLER_ANALOG_RIGHT_X);
 
-        // move the robot
-        chassis.arcade(leftY, rightX);
-        // if(controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_LEFT)){
-        //     moveCascadeTo(10);
-        // }else if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_RIGHT)){
-        //     moveCascadeTo(0);
-        // }
+    //     // move the robot
+    //     chassis.arcade(leftY, rightX);
+    //     // if(controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_LEFT)){
+    //     //     moveCascadeTo(10);
+    //     // }else if (controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_RIGHT)){
+    //     //     moveCascadeTo(0);
+    //     // }
 
-        if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_UP)){
-            distanceReset();
-            // moveCascadeTo(6,5000);
-        }
-        if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)){
-            distanceReset();
-            // moveCascadeTo(0,5000);
-        }
+    //     if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_UP)){
+    //         distanceReset();
+    //         // moveCascadeTo(6,5000);
+    //     }
+    //     if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)){
+    //         distanceReset();
+    //         // moveCascadeTo(0,5000);
+    //     }
 
-        if (!isScoring){
-            double cascadePos = getCascadeInches();
+            if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)){
+                clawBool = true;
+                clawShut.set_value(true);
+            }
+
+            if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_UP)){
+                clawBool = false;
+                clawShut.set_value(false);
+            }
+
+
+    //     if (!isScoring){
+    //         double cascadePos = getCascadeInches();
             
-            if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_B)){
-                cascade.move(127); // Move Up
-            }
-            else if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2)){
-                // Only allow reverse if it is above 0
-                if (cascadePos > 0.011) {
-                    cascade.move(-127);
-                } else {
-                    cascade.move(0); // Lock it at the bottom
-                }
-            }
-            else{
-                cascade.move(0); // Brake mode HOLD kicks in here
-            }
-        }
+    //         if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_B)){
+    //             cascade.move(127); // Move Up
+    //         }
+    //         else if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_R2)){
+    //             // Only allow reverse if it is above 0
+    //             if (cascadePos > 0.011) {
+    //                 cascade.move(-127);
+    //             } else {
+    //                 cascade.move(0); // Lock it at the bottom
+    //             }
+    //         }
+    //         else{
+    //             cascade.move(0); // Brake mode HOLD kicks in here
+    //         }
+    //     }
         
-        toggleMech();
+    //     toggleMech();
         
-        // delay to save resources
-        pros::delay(25);
+    //     // delay to save resources
+    //     pros::delay(25);
     }
 }
 
@@ -594,10 +611,8 @@ void R1Button(){
             armNeedsDown = false;
             pressNum = 1;
             moveArmToHold(450);
-            screenPrint(5, "priming...");
         }else if (pressNum==1){
             isScoring = true;
-            screenPrint(5, "scoring...");
             cascade.set_brake_mode(pros::E_MOTOR_BRAKE_HOLD);
             //moveCascadeTo(660);
             cascade.move_velocity(0);
@@ -636,6 +651,28 @@ void R1Button(){
      }
 };
 
+
+
+////////////////////////////////////////////////////////////////////////////////////
+void toggleMech(){
+    if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)){
+        toggles.set_value(true);
+        // pros::delay(1000);
+    }else{
+        toggles.set_value(false);
+    }
+};
+
+void toggleMechUp(){
+    toggles.set_value(true);
+};
+
+void toggleMechDown(){
+    toggles.set_value(false);
+};
+////////////////////////////////////////////////////////////////////////////////////
+
+
 void RightArrowButton(){
     if(controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_RIGHT)){//ARM movement
         isScoring = true;
@@ -670,22 +707,6 @@ void RightArrowButton(){
     }
 };
 
-void toggleMech(){
-    if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)){
-        toggles.set_value(true);
-        // pros::delay(1000);
-    }else{
-        toggles.set_value(false);
-    }
-};
-
-void toggleMechUp(){
-    toggles.set_value(true);
-};
-
-void toggleMechDown(){
-    toggles.set_value(false);
-};
 void clampClaw(){
     // lower the cascade
     
